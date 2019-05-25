@@ -25,12 +25,22 @@ class HTTPEndpoint:
         request = Request(self.scope, receive=self.receive)
         handler_name = "get" if request.method == "HEAD" else request.method.lower()
         handler = getattr(self, handler_name, self.method_not_allowed)
+        await self.before_handler(request)
         is_async = asyncio.iscoroutinefunction(handler)
         if is_async:
             response = await handler(request)
         else:
             response = await run_in_threadpool(handler, request)
+        await self.after_handler(request, response)
         await response(self.scope, self.receive, self.send)
+
+    # lifecycle hooks
+
+    async def before_handler(self, request):
+        pass
+
+    async def after_handler(self, request, response):
+        pass
 
     async def method_not_allowed(self, request: Request) -> Response:
         # If we're running inside a starlette application then raise an
