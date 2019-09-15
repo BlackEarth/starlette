@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import re
+import traceback
 import typing
 from enum import Enum
 
@@ -35,7 +36,7 @@ def request_response(func: typing.Callable) -> ASGIApp:
     is_coroutine = asyncio.iscoroutinefunction(func)
 
     async def app(scope: Scope, receive: Receive, send: Send) -> None:
-        request = Request(scope, receive=receive)
+        request = Request(scope, receive=receive, send=send)
         if is_coroutine:
             response = await func(request)
         else:
@@ -161,9 +162,9 @@ class Route(BaseRoute):
         if methods is None:
             self.methods = None
         else:
-            self.methods = set([method.upper() for method in methods])
+            self.methods = set(method.upper() for method in methods)
             if "GET" in self.methods:
-                self.methods |= set(["HEAD"])
+                self.methods.add("HEAD")
 
         self.path_regex, self.path_format, self.param_convertors = compile_path(path)
 
@@ -231,8 +232,6 @@ class WebSocketRoute(BaseRoute):
             # Endpoint is a class. Treat it as ASGI.
             self.app = endpoint
 
-        regex = "^" + path + "$"
-        regex = re.sub("{([a-zA-Z_][a-zA-Z0-9_]*)}", r"(?P<\1>[^/]+)", regex)
         self.path_regex, self.path_format, self.param_convertors = compile_path(path)
 
     def matches(self, scope: Scope) -> typing.Tuple[Match, Scope]:
@@ -469,9 +468,15 @@ class Lifespan(BaseRoute):
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         message = await receive()
         assert message["type"] == "lifespan.startup"
-        await self.startup()
-        await send({"type": "lifespan.startup.complete"})
 
+        try:
+            await self.startup()
+        except BaseException:
+            msg = traceback.format_exc()
+            await send({"type": "lifespan.startup.failed", "message": msg})
+            raise
+
+        await send({"type": "lifespan.startup.complete"})
         message = await receive()
         assert message["type"] == "lifespan.shutdown"
         await self.shutdown()
